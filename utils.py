@@ -19,16 +19,19 @@ def dataframe_from_metadata(path:str) -> pd.DataFrame:
 
 
 def dataframe_from_taxonomy(path:str) -> pd.DataFrame:
-    '''Load the ASV taxonomy information.'''
+    '''Load the ASV taxonomy information. The taxonomy file contains non-prokaryotes (e.g. nematodes and Eukaryotes), which 
+    we keep in for the same of completeness.'''
     taxonomy = pd.read_csv(path, delimiter='\t', index_col=0)
-    # Standardize the unclassified taxa (they are entered as TAXA_NAME_unclassified)
-    taxonomy = taxonomy.map(lambda s : 'unclassified' if 'unclassified' in s else s)
-    # Not sure if this is safe to do. 
-    # taxonomy = taxonomy.applymap(lambda s : re.sub('_[0-9]+', '', s))
+    # Handled the unclassified taxa (they are entered as {some category}_unclassified)
+    taxonomy = taxonomy.map(lambda s : s.replace('unclassified_', ''))
 
     for col in taxonomy.columns:
-        # taxonomy[col + '_sub'] = taxonomy[col].apply(lambda s : int(s.split('_')[-1]) if '_' in s else 0)
+        # Some of the nematode taxonomy labels are slightly irregular, as they contain clade information. The clades are discarded
+        # for the same of simplicity (probably don't need much taxonomical resolution for the nematodes.)
+        taxonomy[col] = taxonomy[col].apply(lambda s : 'Amorphea' if ('Amorphea' in s) else s)
+
         p = '([a-zA-Z0-9_]+)_([0-9]+)' # Pattern to match, all taxa ending in _{number}{number}
+        # Create a new "sub" column for more taxonomical resolution if a numerical sub-category is given. 
         taxonomy[col + '_sub'] = taxonomy[col].apply(lambda s : int(re.match(p, s).group(2)) if not (re.match(p, s) is None) else 0)
         taxonomy[col] = taxonomy[col].apply(lambda s : re.match(p, s).group(1) if not (re.match(p, s) is None) else s)
     

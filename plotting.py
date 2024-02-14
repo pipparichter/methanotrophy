@@ -2,16 +2,16 @@ import matplotlib.pyplot as plt
 import pandas as pd 
 import numpy as np
 import seaborn as sns 
-from matrix import AsvMatrix
+from matrices import AsvMatrix
+from ordination import CorrespondenceAnalysis
 from tqdm import tqdm
-
+from typing import NoReturn
 
 
 def plot_rarefaction_curves(matrix:AsvMatrix, n_reps:int=10, path:str=None):
     '''Plot the rarefaction curve for each sample stored in an AsvMatrix.'''
 
-    fig, ax = plt.subplots(1)
-
+    fig, ax = plt.subplots()
 
     # Compute the rarefaction curve for each sample. 
     for i in tqdm(range(matrix.shape[0]), desc='plot.plot_rarefaction_curves'):
@@ -32,10 +32,24 @@ def plot_rarefaction_curves(matrix:AsvMatrix, n_reps:int=10, path:str=None):
     # Plot a vertical line marking the size of the smallest sample in the dataset. 
     smallest_sample_size = min(matrix.matrix.sum(axis=1))
     ymin, ymax = ax.get_ylim()
-    ax.vline(x=smallest_sample_size, ymin=ymin, ymax=ymax, ls='--', c='gray')
+    ax.axvline(x=smallest_sample_size, ymin=ymin, ymax=ymax, ls='--', c='gray')
 
     if path is not None:
         fig.savefig(path, format='PNG')
 
     plt.show()
+
+
+def plot_correspondence_analysis(ca:CorrespondenceAnalysis) -> NoReturn:
+    '''Information about interpreting correspondence analysis plots is can be found
+    here: https://www.displayr.com/interpret-correspondence-analysis-plots-probably-isnt-way-think/'''
+    
+    row_scores, col_scores = ca.get_scores()
+
+    # Want to plot lines connecting the origin to each row point. 
+    for x, y in row_scores:
+        pass
+
+
+# def plot_library_size
         
