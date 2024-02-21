@@ -26,9 +26,15 @@ def dataframe_from_taxonomy(path:str) -> pd.DataFrame:
     taxonomy = taxonomy.map(lambda s : s.replace('unclassified_', ''))
 
     for col in taxonomy.columns:
+        # TODO: Might need a more general way to handle the Eukaryotes. 
+
         # Some of the nematode taxonomy labels are slightly irregular, as they contain clade information. The clades are discarded
         # for the same of simplicity (probably don't need much taxonomical resolution for the nematodes.)
         taxonomy[col] = taxonomy[col].apply(lambda s : 'Amorphea' if ('Amorphea' in s) else s)
+        # SAR or Harosa is a highly diverse clade of eukaryotes, often considered a supergroup, that includes stramenopiles, alveolates,
+        # and rhizarians (all Eukaryotes). Also make an exception for taxonomy labels of this kind. 
+        taxonomy[col] = taxonomy[col].apply(lambda s : 'Harosa' if ('SAR' in s) else s)
+        taxonomy[col] = taxonomy[col].apply(lambda s : 'Archaeplastida' if ('Archaeplastida' in s) else s)
 
         p = '([a-zA-Z0-9_]+)_([0-9]+)' # Pattern to match, all taxa ending in _{number}{number}
         # Create a new "sub" column for more taxonomical resolution if a numerical sub-category is given. 

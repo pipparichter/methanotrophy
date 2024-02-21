@@ -1,8 +1,10 @@
 import numpy as np
 import pandas as pd
 import itertools
-from typing import NoReturn
+from typing import NoReturn, List, Tuple
 import os
+
+# TODO: Maybe think of a better way of organizing sample versus taxonomy metadata. 
 
 class Matrix():
 
@@ -10,14 +12,13 @@ class Matrix():
 
         if df is not None:
             self.matrix = df.values
-            self.shape = self.matrix.shape
             self.row_labels = df.index.values
             self.col_labels = df.columns.values
 
     def __getitem__(self, i):
         return self.matrix[i]        
 
-    def __len___(self):
+    def __len__(self):
         return len(self.matrix)
 
     def transpose(self):
@@ -27,8 +28,10 @@ class Matrix():
         self.col_labels = row_labels
         self.row_labels = col_labels
         self.matrix = self.matrix.T
-        self.shape = self.matrix.shape
-
+    
+    def shape(self) -> Tuple[int, int]:
+        '''Returns the shape of the underlying matrix.'''
+        return self.matrix.shape
 
 
 class DistanceMatrix(Matrix):
@@ -42,9 +45,11 @@ class DistanceMatrix(Matrix):
 class CountMatrix(Matrix):
     '''A matrix which contains observation counts in each cell. '''
 
-    def __init__(self, df:pd.DataFrame=None, metric:str=None):
+    def __init__(self, df:pd.DataFrame=None):
         '''Initialize a CountMatrix object.'''
         super().__init__(df=df) # Initialize the parent class.
+        # Remove any empty columns
+        self.filter_empty_cols()
 
     def get_chi_squared_distance_matrix(self) -> DistanceMatrix:
         '''Compute the chi-squared distance matrix between rows. 
@@ -72,7 +77,6 @@ class CountMatrix(Matrix):
         df = pd.DataFrame(D, columns=self.row_labels, index=self.row_labels)
         return DistanceMatrix(df=df, metric='chi-squared') 
 
-
     def get_bray_curtis_distance_matrix(self) -> DistanceMatrix:
         '''Calculate the Bray-Curtis similarity score for each pair of samples in the
         AsvMatrix object.'''
@@ -92,30 +96,67 @@ class CountMatrix(Matrix):
     def to_df(self):
         '''Convert the matrix to a pandas DataFrame.'''
         return pd.DataFrame(self.matrix, columns=self.col_labels, index=self.row_labels)
-
-    def get_flux_ch4(self, n_bins:int=3):
-
-        # Some checks to make sure the flux data is present. 
-        assert self.metadata is not None, 'matrices.CountMatrix.get_flux_ch4_categories: There is no metadata stored in the CountMatrix object.'
-        assert 'flux_ch4' in self.metadata.columns, 'matrices.CountMatrix.get_flux_ch4_categories: There is no methane flux data in the CountMatrix metadata.'
-
-        # Extract the methane flux from the metadata table, and convert to a numpy array. 
-        flux_ch4 = self.metadata.flux_ch4.values
-
-        if nbins is None: # If no bins are specified, just return the raw flux values for each sample. 
-            return flux_ch4
-        # Get the bin boundaries. 
-        bins = np.linspace(min(flux_ch4), max(flux_ch4) + 1.0, n_bins + 1)
-        # Lower bin boundary is inclusive, upper boundary is not. 
-        flux_ch4_binned = np.digitize(flux_ch4, nbins, right=False)
-        # All bins indices should be between 1 and n_bins.
-        return flux_ch4_binned, bins
-        
-
-
-
     
+    def get_metadata(self, field:str) -> pd.Series:
+        '''Extract information from a particular field in the metadata attribute.'''
+        # Some checks to make sure the flux data is present. 
+        assert self.metadata is not None, 'CountMatrix.get_metadata: There is no metadata stored in the CountMatrix object.'
+        assert field in self.metadata.columns, f'CountMatrix.get_metadata: There is no field {field} in the CountMatrix metadata.'
 
+        # The metadata table contains an entry for each ASV group. This reduces the metadata to one entry per sample. 
+        sample_metadata = self.metadata[['serial_code', field]].drop_duplicates(ignore_index=True)
+        # Extract the data from the metadata table.
+        return sample_metadata[field]
+
+    def get_metadata_fields(self) -> List[str]:
+        '''Return a list of the fields contained in the underlying metadata.'''
+        assert self.metadata is not None, 'CountMatrix.get_metadata_fields: There is no metadata stored in the CountMatrix object.'
+        return list(self.metadata.columns)
+
+    def filter_empty_cols(self):
+        '''Remove empty columns from the matrix. Empty columns can occur when a subset of the total
+        data is loaded, and not all ASVs or Taxonomical categories are represented.'''
+
+        non_empty_idxs = np.sum(self.matrix, axis=0) > 0
+
+        self.col_labels = self.col_labels[non_empty_idxs]
+        self.matrix = self.matrix[:, non_empty_idxs]
+
+    def filter_read_depth(self, min_depth:int):
+        '''Filter the matrix so that only samples with more than the specified number of reads are kept.
+        
+        :param min_depth: The minimum depth requirement for keeping a sample in the AsvMatrix. 
+        '''
+        depths = np.sum(self.matrix, axis=1)
+        idxs = depths >= min_depth
+        print(f'matrices.CountMatrix.filter_read_depth: Discarding {len(self.matrix) - np.sum(idxs)} samples with read depth less than {min_depth}.')
+
+        self.matrix = self.matrix[idxs]
+        self.row_labels = self.row_labels[idxs]
+        # If metadata is present, make sure to drop filtered samples. 
+        if self.metadata is not None:
+            self.metadata = self.metadata[self.metadata.serial_code.isin(self.row_labels)]
+
+    def sample(self, i:int, n:int, species_count_only:bool=False):
+
+        s = self.matrix[i] # Get the sample from the matrix. 
+        
+        # It doesn't make sense to sample from an array of relative abundances, I think. 
+        assert self.normalized == False, 'matrix.AsvMatrix.sample: The AsvMatrix has already been normalized.'
+        assert n <= np.sum(s), f'matrix.AsvMatrix.sample: The sample size must be no greater than the total number of observations ({np.sum(s)}).' 
+        
+        s = np.repeat(self.col_labels, s) # Convert the sample to an array of ASVs where each ASV is repeated the number of times it appears in the sample.
+        s = np.random.choice(s, n, replace=False) # Sample from the array of ASV labels. 
+
+        if species_count_only:
+            # For plotting rarefaction curves, it is much faster to return only the number of unique species.
+            return len(np.unique(s))
+        else:
+            # This uses numpy broadcasting to generate an n-dimensional array of boolean values for each asv, indicating if it matches the element in sample. 
+            # Basically converts sample from an array of ASV labels to an array of counts, with indices corresponding to self.col_labels.
+            s = np.sum(self.col_labels[:, np.newaxis] == s, axis=1).ravel()
+            return s
+        
 
 class TaxonomyMatrix(CountMatrix):
     '''A lower-resolution version of the AsvMatrix. The columns of this matrix correspond to taxonomical categories
@@ -125,9 +166,10 @@ class TaxonomyMatrix(CountMatrix):
     def __init__(self, df:pd.DataFrame=None, metadata:pd.DataFrame=None, level:str='phylum'):
         '''Initialize a TaxonomyMatrix.'''
 
-        super().__init__(df)
+        super().__init__(df=df)
 
-        # The taxonomical level of the columns. 
+        # The taxonomical level of the columns.
+        self.metadata = metadata 
         self.level = level
 
 
@@ -148,45 +190,6 @@ class AsvMatrix(CountMatrix):
         self.metadata = metadata # Store the metadata. 
         self.normalized = False
 
-    def _sample(self, i:int, n:int, species_count_only:bool=False):
-
-        s = self.matrix[i] # Get the sample from the matrix. 
-        
-        # It doesn't make sense to sample from an array of relative abundances, I think. 
-        assert self.normalized == False, 'matrix.AsvMatrix.sample: The AsvMatrix has already been normalized.'
-        assert n <= np.sum(s), f'matrix.AsvMatrix.sample: The sample size must be no greater than the total number of observations ({np.sum(s)}).' 
-        
-        s = np.repeat(self.col_labels, s) # Convert the sample to an array of ASVs where each ASV is repeated the number of times it appears in the sample.
-        s = np.random.choice(s, n, replace=False) # Sample from the array of ASV labels. 
-
-        if species_count_only:
-            # For plotting rarefaction curves, it is much faster to return only the number of unique species.
-            return len(np.unique(s))
-        else:
-            # This uses numpy broadcasting to generate an n-dimensional array of boolean values for each asv, indicating if it matches the element in sample. 
-            # Basically converts sample from an array of ASV labels to an array of counts, with indices corresponding to self.col_labels.
-            s = np.sum(self.col_labels[:, np.newaxis] == s, axis=1).ravel()
-            return s
-
-    def filter_read_depth(self, min_depth:int):
-        '''Filter the matrix so that only samples with more than the specified number of reads are kept.
-        
-        :param min_depth: The minimum depth requirement for keeping a sample in the AsvMatrix. 
-        '''
-        depths = np.sum(self.matrix, axis=1)
-        idxs = depths >= min_depth
-        print(f'matrices.AsvMatrix.filter_read_depth: Discarding {len(self.matrix) - np.sum(idxs)} samples with read depth less than {min_depth}.')
-
-        self.matrix = self.matrix[idxs]
-        self.row_labels = self.row_labels[idxs]
-        self.shape = self.matrix.shape
-
-    def normalize_by_rarefaction(self):
-        '''Normalize the AsvMatrix using rarefaction.'''
-        # It's recommended to choose the largest sample size possible when rarefying. 
-        n = min(np.sum(self.matrix, axis=1))
-        self.matrix = np.array([self._sample(i, n) for i in range(len(self.matrix))])
-
     def get_taxonomy_matrix(self, level:str='phylum') -> TaxonomyMatrix:
         '''Merge the ASVs by taxonomy at the specified taxonomical level.'''
         assert self.metadata is not None, 'matrices.AsvMatrix.get_taxonomy_matrix: No metadata present in AsvMatrix object.'
@@ -195,10 +198,10 @@ class AsvMatrix(CountMatrix):
         df = pd.DataFrame(self.matrix.T, index=self.col_labels, columns=self.row_labels)
         df['asv'] = df.index # Set an ASV column for merging. 
         # Extract the relevant taxonomy information from the metadata. 
-        metadata = self.metadata[['asv', level]]
-        df = df.merge(metadata, on='asv') # Combine the taxonomy metadata with the count matrix. 
+        taxonomy_data = self.metadata[['asv', level]]
+        df = df.merge(taxonomy_data, on='asv') # Combine the taxonomy metadata with the count matrix. 
         df = df.groupby(level).sum() # Group by taxonomy and sum up by sample. 
         df = df.drop(columns='asv') # Drop the ASV column. 
 
-        return TaxonomyMatrix(df=df.transpose(), metadata=self.metadata)
+        return TaxonomyMatrix(df=df.transpose(), metadata=self.metadata, level=level)
     
