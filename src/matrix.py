@@ -3,12 +3,20 @@ import pandas as pd
 import itertools
 from typing import NoReturn, List, Tuple
 import os
+import dask.dataframe 
+# from tqdm.dask import TqdmCallback
+from tqdm import tqdm
+import subprocess
+import time
 
 # TODO: Maybe think of a better way of organizing sample versus taxonomy metadata. 
+
 
 class Matrix():
 
     def __init__(self, df:pd.DataFrame=None) -> NoReturn:
+
+        self.metadata = None
 
         if df is not None:
             self.matrix = df.values
@@ -33,6 +41,11 @@ class Matrix():
         '''Returns the shape of the underlying matrix.'''
         return self.matrix.shape
 
+    def load_metadata(self, path:str):
+        '''Read in sample metadata, and store as an attribute.'''
+        # Get the indices such that each sample is included only once. This avoids reading in the entire array. 
+        self.metadata = pd.read_csv(path, index_col=None) 
+
 
 class DistanceMatrix(Matrix):
 
@@ -44,12 +57,52 @@ class DistanceMatrix(Matrix):
 
 class CountMatrix(Matrix):
     '''A matrix which contains observation counts in each cell. '''
+    
+    levels = ['phylum', 'class', 'order', 'genus', 'species', 'family', 'domain', 'asv']
 
-    def __init__(self, df:pd.DataFrame=None):
+    def __init__(self, df:pd.DataFrame=None, level:str='asv'):
         '''Initialize a CountMatrix object.'''
         super().__init__(df=df) # Initialize the parent class.
         # Remove any empty columns
-        self.filter_empty_cols()
+        self.normalized = False
+
+        assert level in CountMatrix.levels, 'CountMatrix.__init__: Specified level {level} is invalid.'
+        self.level = level
+
+        if df is not None:
+            self.filter_empty_cols()
+
+    def _read_csv_with_dask(self, path:str):
+        '''Read a pandas DataFrame from a CSV file using Dask. This approach was found to be faster than loading the 
+        CSV file in chunks.'''
+        ddf = dask.dataframe.read_csv(path, usecols=[self.level, 'count', 'serial_code'], dtype={self.level:str, 'count':int, 'serial_code':int}, blocksize=25e6)
+        ddf = ddf.groupby(by=['serial_code', self.level]).sum()
+        ddf = ddf.reset_index() # Converts the multi-level index to categorical columns. 
+        ddf = ddf.compute() # Not totally sure why compute needs to be called here. Converts the Dask DataFrame to a pandas DataFrame. 
+        ddf = ddf.pivot_table(columns=self.level, index='serial_code', values='count')
+        # Reset column labels, which were weird because of the multi-indexing. 
+        ddf.columns = ddf.columns.get_level_values(self.level).values
+        return ddf
+
+    def read_csv(self, path:str, verbose:bool=False) -> NoReturn:
+        '''Convert the DataFrame containing the sample metadata and ASV counts into an AsvMatrix object.'''
+        assert self.level is not None, 'CountMatrix.read_csv: A level must be specified prior to loading in a CSV file. '
+        ti = time.perf_counter()
+        df = self._read_csv_with_dask(path)
+        tf = time.perf_counter()
+        if verbose: print(f'CountMatrix.read_csv: CSV file loaded into CountMatrix in {np.round(tf - ti, 2)} seconds.')
+        self.__init__(df=df, level=self.level) # Run the initialization function with the DataFrame as input. 
+
+    def to_csv(self, path:str) -> NoReturn:
+        '''Convert a CountMatrix and associated metadata to a CSV file.'''
+        # Use dask to process the underlying data for speed. This approach is substantially faster than writing in chunks.  
+        ddf = pd.DataFrame(self.matrix, columns=self.col_labels)
+        ddf['serial_code'] = self.row_labels
+        ddf = dask.dataframe.from_pandas(ddf, npartitions=500)
+        ddf = ddf.melt(id_vars=['serial_code'], var_name=self.level) 
+        ddf = ddf.rename(columns={'value':'count'})
+
+        ddf.to_csv(path, index=False)
 
     def get_chi_squared_distance_matrix(self) -> DistanceMatrix:
         '''Compute the chi-squared distance matrix between rows. 
@@ -93,10 +146,6 @@ class CountMatrix(Matrix):
         df = pd.DataFrame(D, columns=self.row_labels, index=self.row_labels)
         return DistanceMatrix(df, metric='bray-curtis')
 
-    def to_df(self):
-        '''Convert the matrix to a pandas DataFrame.'''
-        return pd.DataFrame(self.matrix, columns=self.col_labels, index=self.row_labels)
-    
     def get_metadata(self, field:str) -> pd.Series:
         '''Extract information from a particular field in the metadata attribute.'''
         # Some checks to make sure the flux data is present. 
@@ -158,50 +207,5 @@ class CountMatrix(Matrix):
             return s
         
 
-class TaxonomyMatrix(CountMatrix):
-    '''A lower-resolution version of the AsvMatrix. The columns of this matrix correspond to taxonomical categories
-    of a specified level, and the rows are samples. Each cell contains the number of observations in the sample of organisms
-    which belong to the taxonomical category.'''
 
-    def __init__(self, df:pd.DataFrame=None, metadata:pd.DataFrame=None, level:str='phylum'):
-        '''Initialize a TaxonomyMatrix.'''
-
-        super().__init__(df=df)
-
-        # The taxonomical level of the columns.
-        self.metadata = metadata 
-        self.level = level
-
-
-class AsvMatrix(CountMatrix):
-    '''An object for working with ASV tables, which are matrices of counts where each row corresponds
-    to a sample and each column is an ASV group.'''
-
-    def __init__(self, df:pd.DataFrame, metadata:pd.DataFrame=None):
-        '''Initialize an AsvMatrix object.
-        
-        :param df: A pandas DataFrame containing, at minimum, columns serial_code (the sample ID), count, and asv.
-        '''
-        # Can we assume that all ASVs are present in every sample, but with a count of zero? I think yes, by looking
-        # at the data file, but I should probably add an explicit check. 
-
-        super().__init__(df=df) # Initialize the parent class. 
-
-        self.metadata = metadata # Store the metadata. 
-        self.normalized = False
-
-    def get_taxonomy_matrix(self, level:str='phylum') -> TaxonomyMatrix:
-        '''Merge the ASVs by taxonomy at the specified taxonomical level.'''
-        assert self.metadata is not None, 'matrices.AsvMatrix.get_taxonomy_matrix: No metadata present in AsvMatrix object.'
-
-        # Create a DataFrame where the rows are ASV groups and columns are samples (transpose of typical ASV count matrix).
-        df = pd.DataFrame(self.matrix.T, index=self.col_labels, columns=self.row_labels)
-        df['asv'] = df.index # Set an ASV column for merging. 
-        # Extract the relevant taxonomy information from the metadata. 
-        taxonomy_data = self.metadata[['asv', level]]
-        df = df.merge(taxonomy_data, on='asv') # Combine the taxonomy metadata with the count matrix. 
-        df = df.groupby(level).sum() # Group by taxonomy and sum up by sample. 
-        df = df.drop(columns='asv') # Drop the ASV column. 
-
-        return TaxonomyMatrix(df=df.transpose(), metadata=self.metadata, level=level)
     
