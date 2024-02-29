@@ -9,14 +9,9 @@ warnings.filterwarnings('ignore')
 import pandas as pd
 import numpy as np
 from matrix import *
+from norm import * 
 import pickle
 import argparse
-
-
-def taxonomy_in_cols(cols:List[str]) -> bool:
-    '''Confirm that a taxonomic level is provided in the CSV file.'''
-    taxonomy_cols_in_csv_file = [col for col in cols_in_csv_file if col in TaxonomyMatrix.levels]
-    return len(taxonomy_cols_in_csv_file) > 0
 
 
 if __name__ == '__main__':
@@ -48,9 +43,17 @@ if __name__ == '__main__':
     # Only keep samples which meet the minimum read depth requirement. 
     if args.filter_read_depth is not None:
         M.filter_read_depth(args.filter_read_depth)
+
     # If a normalization approach is specified, normalize the resulting matrix. 
     if args.normalize is not None:
-        M.normalize(args.normalize)
+        # Initialize the appropriate normalizer. 
+        if args.normalize == 'rar':
+            normalizer = Rarefaction()
+        elif args.normalize == 'css':
+            normalizer = ConstantSumScaling()
+        elif args.normalize == 'clr':
+            normalizer = CenteredLogRatioTransformation()
+        normalizer(M) 
 
     # Save the CountMatrix to a pickle file. 
     with open(args.out_path, 'wb') as f:

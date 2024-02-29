@@ -147,7 +147,11 @@ class CountMatrix(Matrix):
         return DistanceMatrix(df, metric='bray-curtis')
 
     def get_metadata(self, field:str) -> pd.Series:
-        '''Extract information from a particular field in the metadata attribute.'''
+        '''Extract information from a particular field in the metadata attribute.
+        
+        :param field: The name of the metadata field to extract.
+        :return: A pandas Series containing the metadata values. 
+        '''
         # Some checks to make sure the flux data is present. 
         assert self.metadata is not None, 'CountMatrix.get_metadata: There is no metadata stored in the CountMatrix object.'
         assert field in self.metadata.columns, f'CountMatrix.get_metadata: There is no field {field} in the CountMatrix metadata.'

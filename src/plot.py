@@ -40,29 +40,33 @@ def plot_rarefaction_curves(matrix:CountMatrix, n_reps:int=10, path:str=None):
     plt.show()
 
 
-def plot_correspondence_analysis(ca:CorrespondenceAnalysis, col_scale:float=0.1, title:str=None) -> NoReturn:
-    '''Information about interpreting correspondence analysis plots is can be found
-    here: https://www.displayr.com/interpret-correspondence-analysis-plots-probably-isnt-way-think/'''
-    fig, ax = plt.subplots(1, figsize=(9, 7))
-    # Grab the first two dimensions of the row and column embeddings. 
-    row_embeddings, col_embeddings = ca.row_embeddings[:, :2], col_scale * ca.col_embeddings[:, :2]
+# def plot_correspondence_analysis(ca:CorrespondenceAnalysis, col_scale:float=0.1, title:str=None) -> NoReturn:
+#     '''Information about interpreting correspondence analysis plots is can be found
+#     here: https://www.displayr.com/interpret-correspondence-analysis-plots-probably-isnt-way-think/'''
+#     fig, ax = plt.subplots(1, figsize=(9, 7))
+#     # Grab the first two dimensions of the row and column embeddings. 
+#     row_embeddings, col_embeddings = ca.row_embeddings[:, :2], col_scale * ca.col_embeddings[:, :2]
 
-    ax.scatter(row_embeddings[:, 0], row_embeddings[:, 1])
-    ax.scatter(col_embeddings[:, 0], col_embeddings[:, 1])
-    # Want to plot lines connecting the origin to each row point. 
-    for (x, y), label in zip(row_embeddings, ca.row_labels):
-        ax.plot([0, x], [0, y], c='gray', lw=1)
-        # Also annotate the point with the label. 
-        ax.annotate(label, (x, y))
-    for (x, y), label in zip(col_embeddings, ca.col_labels):
-        ax.plot([0, x], [0, y], c='lightgray', lw=1)
-        # Also annotate the point with the label. 
-        ax.annotate(label, (x, y), fontsize=5)    
+#     ax.scatter(row_embeddings[:, 0], row_embeddings[:, 1])
+#     ax.scatter(col_embeddings[:, 0], col_embeddings[:, 1])
+#     # Want to plot lines connecting the origin to each row point. 
+#     for (x, y), label in zip(row_embeddings, ca.row_labels):
+#         ax.plot([0, x], [0, y], c='gray', lw=1)
+#         # Also annotate the point with the label. 
+#         ax.annotate(label, (x, y))
+#     for (x, y), label in zip(col_embeddings, ca.col_labels):
+#         ax.plot([0, x], [0, y], c='lightgray', lw=1)
+#         # Also annotate the point with the label. 
+#         ax.annotate(label, (x, y), fontsize=5)    
 
-    ax.axis('off')
+#     ax.axis('off')
 
 
-def plot_nonmetric_multidimensional_scaling(nmds:NonmetricMultidimensionalScaling, title:str=None, labels:pd.Series=None, legend:bool=False) -> NoReturn:
+def plot_nonmetric_multidimensional_scaling(nmds:NonmetricMultidimensionalScaling, 
+    title:str=None, 
+    labels:pd.Series=None, 
+    legend:bool=False,
+    show_fit_surface:List[str]=None) -> NoReturn:
     '''Plot the result of NMDS ordination.
 
     :param nmds: A NonmetricMultiDimensionalScaling object which has been fitted to a CountMatrix. 
@@ -71,12 +75,30 @@ def plot_nonmetric_multidimensional_scaling(nmds:NonmetricMultidimensionalScalin
     '''
 
     fig, ax = plt.subplots()
-
-    data = pd.DataFrame({'NMDS 1':nmds.embeddings[:, 0], 'NMDS 2':nmds.embeddings[:, 1]})
-    data[labels.name] = labels
     
-    sns.scatterplot(data=data, ax=ax, x='NMDS 1', y='NMDS 2', hue=labels.name)
+    # sns.scatterplot(data=data, ax=ax, x='NMDS 1', y='NMDS 2', hue=labels.name)
+    ax.scatter(nmds.row_scores[:, 0], nmds.row_scores[:, 1])
+    
+    if show_fit_surface is not None:
+        n = 100 # The number of points on each axis for which to generate values. 
+        x_min, x_max = ax.get_xlim()
+        y_min, y_max = ax.get_ylim()
+        x, y = np.linspace(x_min, x_max, n),  np.linspace(y_min, y_max, n)
+        # meshgrid produces two n by n arrays. Each element in the first array 
+        xx, yy = np.meshgrid(x, y)
+
+        for name in show_fit_surface:
+            model = nmds.surface_models[name]
+            # Input to model.predict should be of dimensions n_samples, n_features.
+            z = model.predict(np.vstack([xx.ravel(), yy.ravel()]).T)
+            print(xx.shape)
+            print(z.reshape(xx.shape).shape)
+            ax.contour(xx, yy, z.reshape(xx.shape))
+
     ax.set_title('' if title is None else title)
+
+    ax.set_xlabel('NMDS 1')
+    ax.set_ylabel('NMDS 2')
 
     if not legend:
         ax.legend([])
