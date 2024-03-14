@@ -62,46 +62,6 @@ def plot_rarefaction_curves(matrix:CountMatrix, n_reps:int=10, path:str=None):
 #     ax.axis('off')
 
 
-def plot_nonmetric_multidimensional_scaling(nmds:NonmetricMultidimensionalScaling, 
-    title:str=None, 
-    labels:pd.Series=None, 
-    legend:bool=False,
-    show_fit_surface:List[str]=None) -> NoReturn:
-    '''Plot the result of NMDS ordination.
-
-    :param nmds: A NonmetricMultiDimensionalScaling object which has been fitted to a CountMatrix. 
-    :param labels: A pandas Series containing labels for each scatter point. 
-    :param title: A title for the plot. 
-    '''
-
-    fig, ax = plt.subplots()
-    
-    # sns.scatterplot(data=data, ax=ax, x='NMDS 1', y='NMDS 2', hue=labels.name)
-    ax.scatter(nmds.row_scores[:, 0], nmds.row_scores[:, 1])
-    
-    if show_fit_surface is not None:
-        n = 100 # The number of points on each axis for which to generate values. 
-        x_min, x_max = ax.get_xlim()
-        y_min, y_max = ax.get_ylim()
-        x, y = np.linspace(x_min, x_max, n),  np.linspace(y_min, y_max, n)
-        # meshgrid produces two n by n arrays. Each element in the first array 
-        xx, yy = np.meshgrid(x, y)
-
-        for name in show_fit_surface:
-            model = nmds.surface_models[name]
-            # Input to model.predict should be of dimensions n_samples, n_features.
-            z = model.predict(np.vstack([xx.ravel(), yy.ravel()]).T)
-            print(xx.shape)
-            print(z.reshape(xx.shape).shape)
-            ax.contour(xx, yy, z.reshape(xx.shape))
-
-    ax.set_title('' if title is None else title)
-
-    ax.set_xlabel('NMDS 1')
-    ax.set_ylabel('NMDS 2')
-
-    if not legend:
-        ax.legend([])
 
 
 

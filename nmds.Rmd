@@ -1,0 +1,198 @@
+# This is the code used to generate Hannah's NMDS plots.
+# https://www.rpubs.com/RGrieger/545184
+
+# It doesn't seem like any preprocessing or transformation was performed.
+
+# Original matrix has ASVs as row labels and sample names as column headers. 
+counts_tab <- read.csv("ASVs_counts_Mar2023.tsv", header=T, row.names=1 ,check.names=F, sep="\t")
+counts_tab <- counts_tab %>% select(-c('HDK-DNAexNegLot169030916-30cyc', 'HDK22-KML-sand-dry','HDK22-KML-sand-wet', 'HDK-MAR-PCR-BLANK'))
+
+
+# Create dataframe of ASV's and sample names in order needed for vegan package.
+# The t function is a matrix transpose (NOT a transformation). This will make it so that ASVs are columns and samples are rows.
+data1 <- data.frame(t(counts_tab[]))
+
+# Load in the metadata.
+sample_info_tab <- read.table("DNA_input_Mar2023.txt", sep = "\t",  colClasses = "character", header = TRUE)
+
+# Convert sample info and environemtal variables into format needed for vegan.
+samp1 <- sample_info_tab[,-1]
+rownames(samp1) <- sample_info_tab[,1]
+
+
+# Removing unneeded columns for ordination fitting -- all columns except for the environmental data to test to see if it correlates with the NMDS plot.
+# samp1 <- samp1 %>% select(-c(Serial.code))
+# Change values to numeric value type.
+samp1$Flux = as.numeric(samp1$Flux)
+
+
+# Create NMDS using the distance formula (in this case, bray-curtis)
+# Check stress in output.
+# Default MDS engine is monoMDS. Also wascores=True and expand=True... maybe this is what I am missing?
+# wascores doesn't affect the actual ordination, but populates a "wa" attribute in the output. Is this used for plotting?
+stations.mds <- metaMDS(data1, distance = "bray", atuotransform = FALSE)
+
+
+#create envfiorntmal vectors fit OPTIONAL
+stations.envfit <- envfit(stations.mds, samp1, permutations = 999, na.rm = TRUE)
+
+#create species fit - will run for a long time OPTIONAL
+#stations.spp.fit <- envfit(stations.mds, asv_df, permutations = 999)
+
+
+#save
+df_env <- data.frame((stations.envfit$vectors)$arrows, (stations.envfit$vectors)$r, (stations.envfit$vectors)$pvals)
+
+#df_spp <- data.frame((stations.spp.fit$vectors)$arrows, (stations.spp.fit$vectors)$r, (stations.spp.fit$vectors)$pvals)
+
+#write.csv(df_env, "stations_envfit_sept2023.csv")
+#write.csv(df_spp, "stations_spp_sept2023.csv")
+
+
+```
+
+
+
+
+
+#### PLOT VEGAN NMDS - environmetal variables
+```{r eval=F}
+#basic plot
+plot(stations.mds)
+
+#To plot the output from the mds using ggplot a new datasheet needs to be created which contains the x,y points for each site. You can do this by calling the scores of you mds.
+
+site.scrs <- as.data.frame(scores(stations.mds, display = "sites")) #save NMDS results into dataframe
+
+site.scrs <- cbind(site.scrs, Site = samp1$Site) #add grouping variable "station" to dataframe
+
+site.scrs <- cbind(site.scrs, Soil.depth = samp1$Soil.depth)
+
+site.scrs <- cbind(site.scrs, Season = samp1$Season)
+
+site.scrs <- cbind(site.scrs, Flux = samp1$Flux)
+
+site.scrs <- cbind(site.scrs, Serial.code = samp1$Serial.code)
+
+
+head(site.scrs)
+
+
+```
+
+
+To show environmental extrinsic variables another datasheet needs to be created
+
+```{r eval=F}
+env.scores.stations <- as.data.frame(scores(stations.envfit, display = "vectors")) #extracts relevant scores from envifit
+
+env.scores.stations <- cbind(env.scores.stations, env.variables = rownames(env.scores.stations)) #and then gives them their names
+
+env.scores.stations <- cbind(env.scores.stations, pval = stations.envfit$vectors$pvals) # add pvalues to dataframe
+
+sig.env.scrs <- subset(env.scores.stations, pval<=0.05) #subset data to show variables significant at 0.05
+
+env.scores.stations
+
+
+```
+
+
+#### PLOT
+```{r eval=F}
+
+nmds.plot.stations <- ggplot(site.scrs, aes(x=NMDS1, y=NMDS2))+ #sets up the plot
+  geom_point(aes(NMDS1, NMDS2, size = Flux, color = Site, label = Serial.code))+ #adds site points to plot
+  coord_fixed()+
+  theme_classic()+ 
+  theme(panel.background = element_rect(fill = NA, colour = "black", size = 1, linetype = "solid"))+
+  labs(colour = "station", shape = "locale")+ # add legend labels for Management and Landuse
+  theme(legend.position = "right", legend.text = element_text(size = 12), legend.title = element_text(size = 12), axis.text = element_text(size = 10)) # add legend at right of plot
+
+nmds.plot.stations + labs(title = "Basic ordination plot") #displays plot
+
+to_export <- nmds.plot.stations + labs(title = "Basic ordination plot") 
+
+ggsave("NMDS_1.pdf", to_export)
+
+ggplotly(nmds.plot.stations + labs(title = "Basic ordination plot"))
+
+
+nmds.plot.stations <- ggplot(site.scrs, aes(x=NMDS1, y=NMDS2))+ #sets up the plot
+  geom_point(aes(NMDS1, NMDS2, size = Flux, color = Site, shape = Soil.depth  ))+ #adds site points to plot
+  coord_fixed()+
+  theme_classic()+ 
+  theme(panel.background = element_rect(fill = NA, colour = "black", size = 1, linetype = "solid"))+
+  labs(colour = "station", shape = "locale")+ # add legend labels for Management and Landuse
+  theme(legend.position = "right", legend.text = element_text(size = 12), legend.title = element_text(size = 12), axis.text = element_text(size = 10)) # add legend at right of plot
+
+nmds.plot.stations + labs(title = "Basic ordination plot") #displays plot
+
+
+to_export2 <- nmds.plot.stations + labs(title = "Basic ordination plot") 
+
+ggsave("NMDS_2.pdf", to_export2)
+
+
+#Significant Environmental Variables
+
+nmds.plot.stations+
+  geom_segment(data = sig.env.scrs, aes(x = 0, xend=NMDS1, y=0, yend=NMDS2), arrow = arrow(length = unit(0.25, "cm")), colour = "grey10", lwd=0.3) + #add vector arrows of significant env variables
+  ggrepel::geom_text_repel(data = sig.env.scrs, aes(x=NMDS1, y=NMDS2, label = env.variables), cex = 4, direction = "both", segment.size = 0.25)+ #add labels for env variables
+  labs(title="Ordination with environmental vectors")
+
+
+to_save <- nmds.plot.stations_only_samples_2+
+  geom_segment(data = sig.env.scrs, aes(x = 0, xend=NMDS1, y=0, yend=NMDS2), arrow = arrow(length = unit(0.25, "cm")), colour = "grey10", lwd=0.3) + #add vector arrows of significant env variables
+ # ggrepel::geom_text_repel(data = sig.env.scrs, aes(x=NMDS1, y=NMDS2, label = env.variables), cex = 4, direction = "both", segment.size = 0.25)+ #add labels for env variables
+  labs(title="Ordination with environmental vectors")
+
+to_save
+
+ggsave("NMDS_samplesonly.png", to_save)
+
+
+
+```
+
+
+#CONTOUR LINES ON NMDS
+```{r eval=F}
+
+ plot(stations.mds, type = "n")  
+points(stations.mds, display = "sites") 
+ordisurf(stations.mds,samp1$Flux, add = TRUE)
+
+
+
+
+pdf(file = "FluxPlot.pdf",   # The directory you want to save the file in
+    width = 4, # The width of the plot in inches
+    height = 4) # The height of the plot in inches
+
+ plot(stations.mds, type = "n")  
+points(stations.mds, display = "sites") 
+ordisurf(stations.mds,samp1$Flux, add = TRUE)
+
+
+# Step 3: Run dev.off() to create the file!
+dev.off()
+
+```
+
+
+
+
+```{r eval=F}
+
+plot(stations.mds, display = "sites")
+
+#pl <- with(stations.mds) ordiellipse(stations.mds, site.scrs$station, kind="se", conf=0.95, lwd=2, draw = "polygon", col=1:4, border=1:4, alpha=63)
+
+ordiellipse(stations.mds, site.scrs$station, kind="se", conf=0.99, lwd=2, draw = "polygon")
+
+
+```
+
+
+

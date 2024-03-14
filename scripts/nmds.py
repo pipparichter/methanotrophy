@@ -8,7 +8,7 @@ import pickle
 import argparse
 
 
-tm = m.get_taxonomy_matrix()
+
 
 
 if __name__ == '__main__':
