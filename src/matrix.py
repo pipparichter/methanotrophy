@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import itertools
-from typing import NoReturn, List, Tuple
+from typing import NoReturn, List, Tuple, Union
 import os
 import dask.dataframe 
 # from tqdm.dask import TqdmCallback
@@ -127,7 +127,7 @@ class Matrix():
 
 class DistanceMatrix(Matrix):
 
-    valid_metrics = ['bray-curtis', 'euclidean', 'chi-squared']
+    valid_metrics = ['bray-curtis', 'euclidean']
 
     def __init__(self, metric:str=None):
         '''Initialize a DistanceMatrix object.'''
@@ -141,27 +141,6 @@ class DistanceMatrix(Matrix):
         for k, v in self.__dict__.items():
             setattr(new_matrix, k, copy.deepcopy(v))
         return new_matrix
-
-    @staticmethod
-    def _compute_chi_squared_distances(arr:np.array) -> NoReturn:
-        '''Create a distance matrix using chi-squared distance between rows in the input array. 
-        Used formula from https://link.springer.com/referenceworkentry/10.1007/978-0-387-32833-1_53.'''
-        P = array / np.sum(array) # Get the relative frequency table by dividing entries by the grand total. 
-        nrows, ncols = P.shape # Store number of rows and columns. 
-        # Define row and column vector totals. 
-        pi, pj = np.sum(P, axis=1, keepdims=True), np.sum(P, axis=0, keepdims=True)
-        D = np.zeros((nrows, nrows)) # Initialize an empty distance matrix. 
-        for a in range(P.shape[0]): # Iterate over the rows.
-            rows = P
-            row_a = rows[a][np.newaxis, :] # Grab the primary row for this iteration. Add a new axis for broadcasting, so it is [[x1, x2, ...]].
-            d = np.square(row_a - rows) # Should have the same dimensions as P. 
-            assert d.shape == P.shape, f'matrices.Matrix.get_chi_squared_distance_matrix: The vector d should be shape {P.shape}. Instead, shape is {d.shape}.'
-            d = d / pj # Divide by the column totals. 
-            d = np.sum(d, axis=1) # Sum up over the columns. This collapses the dimension. 
-            d = np.sqrt(d) # Take the square root of the sum. 
-            assert len(d) == nrows, f'matrices.Matrix.get_chi_squared_distance_matrix: The vector d should be size {nrows}. Instead, shape is {d.shape}.'
-            D[a] = d # Store the computed distances in the matrix. 
-        return D # Store the distance matrix in the object. 
 
     @staticmethod
     def _compute_bray_curtis_distances(arr:np.array) -> NoReturn:
@@ -179,19 +158,11 @@ class DistanceMatrix(Matrix):
     def _compute_euclidean_distances(arr:np.array) -> NoReturn:
         '''Create a distance matrix using Euclidean distance between rows in the input array. The formula used here is 
         up on the Wikipedia page for Euclidean distance matrices.'''
-        # n = len(arr)
-        # D = np.sum(arr**2, axis=1).reshape(n, 1).repeat(n, axis=1) + np.sum(arr**2, axis=1).reshape(1, n).repeat(n, axis=0) 
-        # D -= 2 * np.matmul(arr, arr.T)
-        # D = np.sqrt(np.round(D, 10))
-        # return D
-        
-        # Why is this not working?
-        n_rows = len(arr)
-        D = np.zeros((n_rows, n_rows)) # Initialize an empty distance matrix. 
-        for i in range(n_rows):
-            x = arr[i, :]
-            D[i] = np.sum(np.square(x - arr), axis=1)
-        return np.sqrt(D)
+        n = len(arr)
+        D = np.sum(arr**2, axis=1).reshape(n, 1).repeat(n, axis=1) + np.sum(arr**2, axis=1).reshape(1, n).repeat(n, axis=0) 
+        D -= 2 * np.matmul(arr, arr.T)
+        D = np.sqrt(np.round(D, 10))
+        return D
 
     def from_numpy(self, arr:np.array, row_labels:List[str]=None, col_labels:List[str]=None):
         '''Initialize the DistanceMatrix object from a Numpy array.'''
@@ -226,64 +197,95 @@ class CountMatrix(Matrix):
             setattr(new_matrix, k, copy.deepcopy(v))
         return new_matrix
 
-    def get_metadata(self, field:str) -> pd.Series:
+    # TODO: Probably a way to clean up this function.
+    def get_metadata(self, fields:Union[List[str], str]) -> Union[pd.Series, pd.DataFrame]:
         '''Extract information from a particular field in the metadata attribute.
         
         :param field: The name of the metadata field to extract.
-        :return: A pandas Series containing the metadata values. 
+        :return: A pandas Series or DataFrame containing the metadata values. 
         '''
-        assert field in self.get_metadata_fields(), f'CountMatrix.get_metadata: There is no field {field} in the CountMatrix metadata.'
-        # Extract the data from the metadata table.
-        return self.metadata[field]
+        if type(fields) == list:
+            for field in fields:
+                assert field in self.get_metadata_fields(), f'CountMatrix.get_metadata: There is no field {field} in the CountMatrix metadata.'
+            data = self.metadata[fields]
+            for field in fields:
+                try:
+                    data[field] = pd.to_numeric(data[field])
+                except:
+                    continue
+        else:
+            assert fields in self.get_metadata_fields(), f'CountMatrix.get_metadata: There is no field {field} in the CountMatrix metadata.'
+            data = self.metadata[fields]
+
+            try:
+                data = pd.to_numeric(data)
+            except:
+                pass
+
+        return data
+
+    def bin_metadata(self, field:str, n_bins:int=3) -> Tuple[np.ndarray, np.ndarray]:
+        '''Convert a continuous metadata field into a categorical one by dividing it into n_bins bins. Returns an array 
+        of bin labels for each metadata entry and the bin edges. It also adds a binned field to the stored metadata DataFrame.
+        
+        :param field: The continuous metadata field to categorize.
+        :param n_bins: The number of bins into which to sort the metadata variable.
+        :return: A tuple of 1D numpy arrays. The first array contains the bin labels, and is of shape len(self.metadata). 
+            The second array contains the bin edges, and is of shape n_bins + 1. .
+        '''
+        vals = self.get_metadata(field).values
+        bins = np.histogram_bin_edges(vals, bins=n_bins)
+        # Compute the bin labels. 
+        bin_labels = np.digitize(vals, bins, right=False)
+        # Add the binned data to the metadata DataFeame.. 
+        self.metadata[f'{field}_binned'] = bin_labels
+        return bin_labels, bins
 
     def get_metadata_fields(self) -> List[str]:
         '''Return a list of the fields contained in the underlying metadata.'''
         assert self.metadata is not None, 'CountMatrix.get_metadata_fields: There is no metadata stored in the CountMatrix object.'
         return list(self.metadata.columns)
 
-    def filter_empty_cols(self, verbose:bool=True):
-        '''Remove empty columns from the CountMatrix. Empty columns can occur when a subset of the total
-        data is loaded, and not all ASVs or Taxonomical categories are represented.'''
-        non_empty_idxs = np.sum(self.matrix, axis=0) > 0
-        num_empty_cols = len(self.col_labels) - np.sum(non_empty_idxs)
-        if verbose: print(f'CountMatrix.filter_empty_cols: Removing {num_empty_cols} empty columns from the CountMatrix.')
-        self.col_labels = self.col_labels[non_empty_idxs]
-        self.matrix = self.matrix[:, non_empty_idxs]
-        return self # Return a reference to the object.
-
-    def filter_read_depth(self, min_depth:int):
-        '''Filter the matrix so that only samples with more than the specified number of reads are kept.'''
-        depths = np.sum(self.matrix, axis=1)
-        idxs = depths >= min_depth
-        print(f'matrices.CountMatrix.filter_read_depth: Discarding {len(self.matrix) - np.sum(idxs)} samples with read depth less than {min_depth}.')
-
-        self.matrix = self.matrix[idxs]
+    def filter_rows(self, threshold:int):
+        '''Remove all rows whose totals do not meet the specified threshold. Assuming the underlying data is samples-by-species,
+        this has the effect of removing samples with low read depth from the CountMatrix.
+        
+        :param threshold: The minimum allowed value (inclusive).
+        :return: The CountMatrix object to which the filtering was applied.
+        '''
+        idxs = self._filter(threshold, axis=1)
+        self.matrix = self.matrix[idxs, :]
         self.row_labels = self.row_labels[idxs]
-        # If metadata is present, make sure to drop filtered samples. 
+        # If we are removing rows, we should also filter the metadata. 
         if self.metadata is not None:
-            self.metadata = self.metadata[self.metadata.serial_code.isin(self.row_labels)]
+            self.metadata = self.metadata[self.metadata.index.isin(self.row_labels)]
         return self
 
-    def sample(self, i:int, n:int, species_count_only:bool=False):
-        '''Returns either an integer indicating the number of unique species in the sample or an array.'''
-        s = self.matrix[i] # Get the sample from the matrix. 
+    def filter_cols(self, threshold:int):
+        '''Remove all columns whose totals do not meet the specified threshold. Assuming the underlying data is samples-by-species, 
+        this has the effect of removing rare taxa from the CountMatrix.
         
-        # It doesn't make sense to sample from an array of relative abundances, I think. 
-        assert self.normalized == False, 'matrix.AsvMatrix.sample: The AsvMatrix has already been normalized.'
-        assert n <= np.sum(s), f'matrix.AsvMatrix.sample: The sample size must be no greater than the total number of observations ({np.sum(s)}).' 
-        
-        s = np.repeat(self.col_labels, s) # Convert the sample to an array of ASVs where each ASV is repeated the number of times it appears in the sample.
-        s = np.random.choice(s, n, replace=False) # Sample from the array of ASV labels. 
+        :param threshold: The minimum allowed value (inclusive).
+        :return: The CountMatrix object to which the filtering was applied.
+        '''
+        idxs = self._filter(threshold, axis=0)
+        self.matrix = self.matrix[:, idxs]
+        self.col_labels = self.col_labels[idxs]
+        return self
 
-        if species_count_only:
-            # For plotting rarefaction curves, it is much faster to return only the number of unique species.
-            return len(np.unique(s))
-        else:
-            # This uses numpy broadcasting to generate an n-dimensional array of boolean values for each asv, indicating if it matches the element in sample. 
-            # Basically converts sample from an array of ASV labels to an array of counts, with indices corresponding to self.col_labels.
-            s = np.sum(self.col_labels[:, np.newaxis] == s, axis=1).ravel()
-            return s
+    def _filter(self, threshold:int, axis:int=0) -> np.ndarray:
+        '''Filter out the rows or columns whose totals do not meet the specified threshold.
         
+        :param threshold: The minimum allowed value (inclusive).
+        :param axis: If 1, filtering is performed using row totals. If 0, filtering is performed using column totals. 
+        :param: The indices of the rows or columns which meet the specified threshold. 
+        '''
+        totals = np.sum(self.matrix, axis=axis)
+        idxs = depths >= threshold
+        print(f'CountMatrix._filter: {len(idxs) - np.sum(idxs)} dimensions removed.')
+
+        return idxs
+
     def load_metadata(self, path:str=None, index_col='serial_code', usecols=['site', 'season', 'flux_ch4', 'temp_air', 'temp_soil', 'water_content', 'bulk_density']):
         '''Read in the specified fields from a metadata file into a pandas DataFrame, and store as an attribute. If there is more than one
         entry for a given sample, then all duplicate rows after the first row are removed from the metadata.'''
@@ -294,5 +296,9 @@ class CountMatrix(Matrix):
         nf = len(metadata)
         print(f'Matrix.load_metadata: {ni - nf} duplicate rows were removed from the metadata.')
         self.metadata = metadata # Store the metadata in the object.
+        
+
+    def plot_species_distribution(self):
+        pass
 
     
